@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+studio.db
+studio.db-*
+.venv/
+venv/
+.pytest_cache/
+.superpowers/
+*.egg-info/
+.coverage

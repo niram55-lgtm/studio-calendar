@@ -1,0 +1,31 @@
+# מצב פריסה
+deployment_mode: local            # local | cloud
+base_url: http://localhost:5000   # יוחלף ב-cloud דרך env BASE_URL
+
+# שרת
+host: 127.0.0.1                   # 0.0.0.0 ב-cloud
+port: 5000
+
+# ברירות מחדל ל-user settings חדשים
+defaults:
+  timezone: Asia/Jerusalem
+  class_duration_minutes: 55
+  weeks_ahead: 1                  # 2 שבועות סה"כ (נוכחי + 1 קדימה)
+  urgent_window_hours: 24
+  digest_time: "06:30"
+
+# תזמון
+scheduler:
+  daily_sync_hour: 6
+  daily_sync_minute: 0
+  cache_ttl_hours: 1
+
+# BoostApp
+boostapp:
+  base_url: https://app.boostapp.co.il/Rest.php
+  user_agent: "StudioCalendar/1.0"
+  request_timeout: 15
+
+# ntfy
+ntfy:
+  server: https://ntfy.sh
