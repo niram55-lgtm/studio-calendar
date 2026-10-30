@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="login">
+  <h1>ברוך הבא</h1>
+  <p>היכנס עם חשבון Google כדי לסנכרן את לוח הסטודיו ליומן שלך.</p>
+  <a class="btn btn-google" href="{{ url_for('auth_google') }}">
+    התחבר עם Google
+  </a>
+</div>
+{% endblock %}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>📎 קישור ה-BoostApp</h2>
+  <div class="row">
+    <input id="link" placeholder="https://app.boostapp.co.il/Rest.php?datepicker=...&StudioUrl=..." />
+    <button id="btn-load">טען</button>
+  </div>
+  <small id="load-status"></small>
+</section>
+
+<section class="card">
+  <div class="row">
+    <h2>המדריכות שלי</h2>
+    <div>
+      <button id="btn-all">בחר הכל</button>
+      <button id="btn-none">נקה</button>
+    </div>
+  </div>
+  <div id="trainers"></div>
+  <button id="btn-save-trainers">💾 שמור</button>
+</section>
+
+<section class="card">
+  <h2>סנכרון</h2>
+  <div class="row">
+    <button id="btn-sync">🟢 סנכרן ל-Google Calendar</button>
+    <button id="btn-apple">🍎 לינק ל-Apple</button>
+    <a id="btn-ics" href="/download.ics" class="btn">📥 הורד ICS</a>
+  </div>
+  <div id="apple-link" class="hidden">
+    <code id="apple-url"></code>
+    <button id="btn-copy">העתק</button>
+  </div>
+  <div id="sync-status"></div>
+</section>
+
+<section class="card">
+  <h2>⚙️ הגדרות התראות (ntfy)</h2>
+  <div class="row">
+    <label>חלון דחיפות:
+      <input type="number" id="urgent" min="1" max="168" />
+      שעות
+    </label>
+    <label>שעת digest:
+      <input type="text" id="digest-time" pattern="[0-9]{2}:[0-9]{2}" />
+    </label>
+  </div>
+  <label><input type="checkbox" id="notif-cancel" /> התראות על ביטולים</label><br>
+  <label><input type="checkbox" id="notif-change" /> התראות על שינויים</label><br>
+  <label><input type="checkbox" id="notif-new" /> התראות על שיעורים חדשים</label><br>
+  <p>📱 ntfy topic: <code>{{ settings.ntfy_topic }}</code></p>
+  <button id="btn-save-settings">💾 שמור הגדרות</button>
+</section>
+
+<footer class="status">
+  <span>סנכרון אחרון: {{ settings.last_sync_at or 'מעולם' }}
+    ({{ settings.last_sync_status or '-' }})</span>
+</footer>
+
+{% endblock %}
+{% block scripts %}
+<script>
+window.STUDIO = {
+  base_url: {{ base_url|tojson }},
+  feed_token: {{ settings.feed_token|tojson }},
+  initial_trainers: {{ trainers|map(attribute='trainer_name')|list|tojson }},
+  initial_enabled: {{ trainers|selectattr('enabled')|map(attribute='trainer_name')|list|tojson }}
+};
+</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

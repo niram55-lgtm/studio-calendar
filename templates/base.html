@@ -1,0 +1,19 @@
+<!doctype html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}סטודיו קלנדר{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <strong>סטודיו קלנדר</strong>
+    {% if session.get('user_id') %}
+      <nav><a href="{{ url_for('logout') }}">יציאה</a></nav>
+    {% endif %}
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
