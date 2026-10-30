@@ -179,7 +179,7 @@ def sync_user(
                 google_event_id=created.get("id"),
             ))
 
-        settings.last_sync_at = dt.datetime.utcnow()
+        settings.last_sync_at = dt.datetime.now(dt.timezone.utc)
         settings.last_sync_status = "ok"
         session.flush()
     except Exception as exc:

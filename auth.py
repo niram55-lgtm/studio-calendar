@@ -78,7 +78,7 @@ def exchange_code(config: Config, code: str) -> GoogleAuthResult:
         name=id_info.get("name", ""),
         access_token=creds.token,
         refresh_token=creds.refresh_token,
-        expiry=creds.expiry or dt.datetime.utcnow() + dt.timedelta(hours=1),
+        expiry=creds.expiry or dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1),
     )
 
 
