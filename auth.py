@@ -115,18 +115,26 @@ def upsert_user_from_auth(session: Session, result: GoogleAuthResult) -> User:
 
     tok = session.query(GoogleToken).filter_by(user_id=user.id).one_or_none()
     encrypted_access = crypto.encrypt(result.access_token)
-    encrypted_refresh = crypto.encrypt(result.refresh_token)
+    # Google may omit refresh_token on a return login — keep the existing
+    # stored value in that case. On first login refresh_token must exist;
+    # if it does not we cannot persist the user usefully, so raise.
     if tok is None:
+        if not result.refresh_token:
+            raise RuntimeError(
+                "First login missing refresh_token — add prompt=consent and "
+                "access_type=offline in the OAuth flow"
+            )
         tok = GoogleToken(
             user_id=user.id,
             encrypted_access=encrypted_access,
-            encrypted_refresh=encrypted_refresh,
+            encrypted_refresh=crypto.encrypt(result.refresh_token),
             expiry=result.expiry,
         )
         session.add(tok)
     else:
         tok.encrypted_access = encrypted_access
-        tok.encrypted_refresh = encrypted_refresh
+        if result.refresh_token:
+            tok.encrypted_refresh = crypto.encrypt(result.refresh_token)
         tok.expiry = result.expiry
 
     session.flush()

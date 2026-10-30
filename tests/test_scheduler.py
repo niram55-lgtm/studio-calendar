@@ -121,3 +121,77 @@ def test_start_registers_two_cron_jobs(cfg, engine_and_factory):
     jobs = {j.id: j for j in sched.get_jobs()}
     assert "daily_sync" in jobs
     assert "daily_digest" in jobs
+
+
+def test_sync_all_users_skips_when_unfiltered_scrape_is_empty_and_snapshots_exist(cfg, engine_and_factory):
+    """Scraper returning [] while the DB has snapshots is a near-certain
+    scrape failure (BoostApp down, HTML drift, holiday page). The scheduler
+    must skip sync for that user instead of wiping their calendar."""
+    from models import Trainer, ClassSnapshot
+    import datetime as _dt
+    _, factory = engine_and_factory
+    with factory() as s:
+        u = _mk_user(s, "u1", "studio1", feed="f1", ntfy="n1")
+        s.add(Trainer(user_id=u.id, trainer_name="pick-me", enabled=True))
+        s.add(ClassSnapshot(
+            user_id=u.id, loose_uid="loose", strict_uid="strict",
+            class_date=_dt.date(2026, 2, 2), class_time="18:00",
+            trainer="pick-me", class_type="X", room="R",
+            google_event_id="event-stay",
+        ))
+        s.commit()
+
+    sync_calls = []
+
+    def fake_fetch(studio_url, weeks_ahead, **kw):
+        return []  # scrape says nothing — do NOT trust it.
+
+    def fake_sync(session, user_id, classes, duration_minutes, **kw):
+        sync_calls.append(user_id)
+        return SyncDiff()
+
+    with patch("scheduler.fetch_schedule", side_effect=fake_fetch), \
+         patch("scheduler.sync_user", side_effect=fake_sync), \
+         patch("scheduler.process_diff", MagicMock()):
+        sync_all_users(cfg, factory, http=MagicMock())
+    assert sync_calls == []  # must not have called sync_user at all
+    with factory() as s:
+        settings = s.query(UserSettings).filter_by(user_id=1).one()
+        assert settings.last_sync_status == "skipped:empty_scrape_with_snapshots"
+
+
+def test_sync_all_users_passes_only_enabled_trainers_to_sync(cfg, engine_and_factory):
+    """Scheduler must filter classes by the user's enabled trainers before
+    handing them to sync_user — otherwise cron pushes every trainer's class
+    while manual /api/sync (which filters) stays correct."""
+    from scraper import ClassItem
+    import datetime as _dt
+    from models import Trainer
+    _, factory = engine_and_factory
+    with factory() as s:
+        u = _mk_user(s, "u1", "studio1", feed="f1", ntfy="n1")
+        s.add(Trainer(user_id=u.id, trainer_name="pick-me", enabled=True))
+        s.add(Trainer(user_id=u.id, trainer_name="skip-me", enabled=False))
+        s.commit()
+
+    passed_trainers: list[str] = []
+
+    def fake_fetch(studio_url, weeks_ahead, **kw):
+        return [
+            ClassItem(date=_dt.date(2026, 2, 2), time=_dt.time(18, 0),
+                      trainer="pick-me", class_type="X", room="R",
+                      source="live"),
+            ClassItem(date=_dt.date(2026, 2, 2), time=_dt.time(19, 0),
+                      trainer="skip-me", class_type="Y", room="R",
+                      source="live"),
+        ]
+
+    def fake_sync(session, user_id, classes, duration_minutes, **kw):
+        passed_trainers.extend(c.trainer for c in classes)
+        return SyncDiff()
+
+    with patch("scheduler.fetch_schedule", side_effect=fake_fetch), \
+         patch("scheduler.sync_user", side_effect=fake_sync), \
+         patch("scheduler.process_diff", MagicMock()):
+        sync_all_users(cfg, factory, http=MagicMock())
+    assert passed_trainers == ["pick-me"]

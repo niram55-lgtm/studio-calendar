@@ -226,7 +226,7 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
         if not s.studio_url:
             return jsonify({"error": "no studio_url set"}), 400
         http = requests.Session()
-        classes = fetch_schedule(
+        raw_classes = fetch_schedule(
             s.studio_url,
             weeks_ahead=s.weeks_ahead or 1,
             session=g.db_session,
@@ -236,9 +236,15 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
             user_agent=config.boostapp.user_agent,
             request_timeout=config.boostapp.request_timeout,
         )
+        snapshot_count = (g.db_session.query(ClassSnapshot)
+                          .filter_by(user_id=s.user_id).count())
+        if not raw_classes and snapshot_count > 0:
+            s.last_sync_status = "skipped:empty_scrape_with_snapshots"
+            return jsonify({"error": "empty_scrape_with_snapshots",
+                            "message": "הלוח חזר ריק מ-BoostApp; הסנכרון דולג כדי לא למחוק את היומן"}), 409
         enabled = {t.trainer_name for t in g.db_session.query(Trainer)
                    .filter_by(user_id=s.user_id, enabled=True).all()}
-        filtered = [c for c in classes if c.trainer in enabled]
+        filtered = [c for c in raw_classes if c.trainer in enabled]
 
         from googleapiclient.discovery import build as build_google
         def _mk(uid):

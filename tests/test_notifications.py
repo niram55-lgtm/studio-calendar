@@ -156,6 +156,32 @@ def test_send_digest_merges_pending_rows(session):
     assert session.query(PendingDigest).count() == 0
 
 
+def test_failed_push_does_not_mark_as_sent_so_next_run_retries(session):
+    """If ntfy.sh is down, the notification must NOT be marked sent, so the
+    next scheduler run retries."""
+    u = _user(session)
+    now = dt.datetime(2026, 2, 2, 15, 0, tzinfo=dt.timezone.utc)
+    snap = _snap(u.id, _c(hour=18))
+    session.add(snap)
+    session.commit()
+    diff = SyncDiff(removed=[snap])
+
+    class FailingHTTP:
+        def post(self, url, **kwargs):
+            raise requests.ConnectionError("ntfy down")
+
+    process_diff(session, u.id, diff, now=now, http=FailingHTTP(),
+                 ntfy_server="https://ntfy.sh")
+    assert session.query(NotificationsLog).count() == 0
+
+    # Second attempt with a working ntfy.sh succeeds.
+    good_http = FakeHTTP()
+    process_diff(session, u.id, diff, now=now, http=good_http,
+                 ntfy_server="https://ntfy.sh")
+    assert len(good_http.posts) == 1
+    assert session.query(NotificationsLog).count() == 1
+
+
 def test_push_hebrew_title_is_rfc2047_encoded():
     http = FakeHTTP()
     push(http, "https://ntfy.sh", "my-topic", "⚠️ בוטל", "body")

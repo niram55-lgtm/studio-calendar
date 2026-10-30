@@ -176,3 +176,5 @@ def test_sync_user_empty_new_list_does_not_delete_everything_if_no_old(session, 
     assert non_cal_calls == []
     settings = session.query(UserSettings).filter_by(user_id=user.id).one()
     assert settings.last_sync_status == "ok"
+
+

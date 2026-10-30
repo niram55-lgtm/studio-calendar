@@ -12,7 +12,7 @@ from googleapiclient.discovery import build as build_google_service
 from auth import load_credentials
 from calendar_google import NeedsReauth, sync_user
 from config import Config
-from models import User, UserSettings
+from models import ClassSnapshot, Trainer, User, UserSettings
 from notifications import process_diff, send_digest
 from scraper import fetch_schedule
 
@@ -37,7 +37,7 @@ def sync_all_users(config: Config, session_factory, http: requests.Session) -> N
             try:
                 settings = (session.query(UserSettings)
                             .filter_by(user_id=u.id).one())
-                classes = fetch_schedule(
+                raw_classes = fetch_schedule(
                     settings.studio_url,
                     weeks_ahead=settings.weeks_ahead or 1,
                     session=session,
@@ -47,6 +47,23 @@ def sync_all_users(config: Config, session_factory, http: requests.Session) -> N
                     user_agent=config.boostapp.user_agent,
                     request_timeout=config.boostapp.request_timeout,
                 )
+                # Safety: empty UNFILTERED scrape + existing snapshots =
+                # near-certain scrape failure. Refuse to wipe the user's
+                # calendar; a real cancellation would still leave other
+                # classes in the page.
+                snapshot_count = (session.query(ClassSnapshot)
+                                  .filter_by(user_id=u.id).count())
+                if not raw_classes and snapshot_count > 0:
+                    settings.last_sync_status = "skipped:empty_scrape_with_snapshots"
+                    session.commit()
+                    logger.warning(
+                        "user %s: empty scrape with %d snapshots — skipping",
+                        u.id, snapshot_count,
+                    )
+                    continue
+                enabled = {t.trainer_name for t in session.query(Trainer)
+                           .filter_by(user_id=u.id, enabled=True).all()}
+                classes = [c for c in raw_classes if c.trainer in enabled]
                 diff = sync_user(
                     session, u.id, classes,
                     duration_minutes=settings.duration_minutes or 55,

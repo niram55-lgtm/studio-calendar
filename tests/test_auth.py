@@ -85,6 +85,24 @@ def test_upsert_user_second_login_reuses_settings(session):
     assert crypto.decrypt(tok.encrypted_refresh) == "new-refresh"
 
 
+def test_upsert_user_second_login_without_refresh_token_keeps_existing(session):
+    """Google may omit refresh_token on a return login (no prompt=consent,
+    or because the user already granted). Keep the stored refresh token."""
+    u1 = upsert_user_from_auth(session, _result())
+    session.commit()
+    tok_before = session.query(GoogleToken).filter_by(user_id=u1.id).one()
+    stored_refresh_before = crypto.decrypt(tok_before.encrypted_refresh)
+
+    r2 = _result()
+    r2.access_token = "new-access"
+    r2.refresh_token = None  # Google omitted it on this round-trip
+    u2 = upsert_user_from_auth(session, r2)
+    session.commit()
+    tok_after = session.query(GoogleToken).filter_by(user_id=u2.id).one()
+    assert crypto.decrypt(tok_after.encrypted_access) == "new-access"
+    assert crypto.decrypt(tok_after.encrypted_refresh) == stored_refresh_before
+
+
 def test_load_credentials_decrypts_and_returns_valid_object(cfg, session):
     user = upsert_user_from_auth(session, _result())
     session.commit()

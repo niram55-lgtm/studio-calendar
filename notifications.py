@@ -40,6 +40,12 @@ def push(
     priority: int = 4,
     tags: list[str] | None = None,
 ) -> None:
+    """POST one message to ntfy.sh.
+
+    Raises on failure so the caller can decide whether to retry; this
+    is deliberate — swallowing errors here caused missed-cancellation
+    bugs in earlier iterations.
+    """
     headers = {
         "Title": _encode_title(title),
         "Priority": str(priority),
@@ -47,12 +53,9 @@ def push(
     if tags:
         headers["Tags"] = ",".join(tags)
     url = f"{ntfy_server.rstrip('/')}/{topic}"
-    try:
-        resp = http.post(url, data=body.encode("utf-8"), headers=headers,
-                         timeout=15)
-        resp.raise_for_status()
-    except Exception as exc:  # pragma: no cover
-        logger.warning("ntfy push failed: %s", exc)
+    resp = http.post(url, data=body.encode("utf-8"), headers=headers,
+                     timeout=15)
+    resp.raise_for_status()
 
 
 def _format_date_he(d: dt.date, t: dt.time) -> str:
@@ -97,23 +100,23 @@ def _class_start_utc(d: dt.date, t_hhmm: str | dt.time) -> dt.datetime:
     return local.astimezone(dt.timezone.utc)
 
 
-def _log_or_skip(session: Session, user_id: int, luid: str,
-                 change_type: str) -> bool:
-    """Insert into notifications_log; return False if already present."""
-    exists = (session.query(NotificationsLog)
-              .filter_by(user_id=user_id, loose_uid=luid,
-                         change_type=change_type).count())
-    if exists:
-        return False
+def _already_sent(session: Session, user_id: int, luid: str,
+                  change_type: str) -> bool:
+    """Return True if we have already logged this (user, item, change)."""
+    return bool(session.query(NotificationsLog)
+                .filter_by(user_id=user_id, loose_uid=luid,
+                           change_type=change_type).count())
+
+
+def _mark_sent(session: Session, user_id: int, luid: str,
+               change_type: str) -> None:
     session.add(NotificationsLog(
         user_id=user_id, loose_uid=luid, change_type=change_type,
     ))
     try:
         session.flush()
-        return True
     except IntegrityError:
         session.rollback()
-        return False
 
 
 def process_diff(
@@ -130,13 +133,19 @@ def process_diff(
 
     def _emit(title: str, body: str, luid: str, change_type: str,
               start_utc: dt.datetime) -> None:
-        if not _log_or_skip(session, user_id, luid, change_type):
+        if _already_sent(session, user_id, luid, change_type):
             return
         delta = start_utc - now
         if delta <= urgent and delta >= dt.timedelta(hours=-1):
-            push(http, ntfy_server, settings.ntfy_topic, title, body,
-                 priority=5 if change_type == "removed" else 4,
-                 tags=["warning"] if change_type == "removed" else None)
+            try:
+                push(http, ntfy_server, settings.ntfy_topic, title, body,
+                     priority=5 if change_type == "removed" else 4,
+                     tags=["warning"] if change_type == "removed" else None)
+            except Exception as exc:
+                # Push failed — do NOT mark as sent; next sync will retry.
+                logger.warning("ntfy push failed, will retry: %s", exc)
+                return
+            _mark_sent(session, user_id, luid, change_type)
         else:
             session.add(PendingDigest(
                 user_id=user_id, change_type=change_type,
@@ -144,6 +153,8 @@ def process_diff(
                                         ensure_ascii=False),
             ))
             session.flush()
+            # Digest rows carry their own completion signal (deleted on
+            # send); no notifications_log entry at queue time.
 
     if settings.notify_on_cancellation:
         for snap in diff.removed:
@@ -201,7 +212,11 @@ def send_digest(
             lines.append(row.payload_json)
     title = f"📋 עדכוני לוח ({len(pending)} שינויים)"
     body = "\n".join(lines)
-    push(http, ntfy_server, settings.ntfy_topic, title, body, priority=3)
+    try:
+        push(http, ntfy_server, settings.ntfy_topic, title, body, priority=3)
+    except Exception as exc:
+        logger.warning("digest push failed; keeping pending rows: %s", exc)
+        return
     for row in pending:
         session.delete(row)
     session.flush()
