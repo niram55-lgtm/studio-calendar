@@ -31,7 +31,8 @@ def session():
 
 
 def test_build_authorize_url_contains_scopes_and_redirect(cfg):
-    url = build_authorize_url(cfg, state="xyz")
+    url, verifier = build_authorize_url(cfg, state="xyz")
+    assert verifier and len(verifier) >= 32
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
     assert qs["state"] == ["xyz"]

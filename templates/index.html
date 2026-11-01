@@ -49,7 +49,11 @@
   <label><input type="checkbox" id="notif-cancel" /> התראות על ביטולים</label><br>
   <label><input type="checkbox" id="notif-change" /> התראות על שינויים</label><br>
   <label><input type="checkbox" id="notif-new" /> התראות על שיעורים חדשים</label><br>
-  <p>📱 ntfy topic: <code>{{ settings.ntfy_topic }}</code></p>
+  <p>📱 ntfy topic:
+    <code id="ntfy-topic" data-topic="{{ settings.ntfy_topic }}">••••••••</code>
+    <button type="button" id="btn-reveal-topic">הצג</button>
+    <br><small>⚠️ כל מי שרואה את ה-topic יכול לקרוא את כל ההתראות שלך. אל תשתף.</small>
+  </p>
   <button id="btn-save-settings">💾 שמור הגדרות</button>
 </section>
 

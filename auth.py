@@ -34,7 +34,8 @@ class GoogleAuthResult:
     expiry: dt.datetime
 
 
-def _flow(config: Config, state: str | None = None) -> Flow:
+def _flow(config: Config, state: str | None = None,
+          code_verifier: str | None = None) -> Flow:
     client_config = {
         "web": {
             "client_id": config.google_client_id,
@@ -50,24 +51,27 @@ def _flow(config: Config, state: str | None = None) -> Flow:
         state=state,
     )
     flow.redirect_uri = f"{config.base_url}/auth/callback"
+    if code_verifier is not None:
+        flow.code_verifier = code_verifier
     return flow
 
 
-def build_authorize_url(config: Config, state: str) -> str:
+def build_authorize_url(config: Config, state: str) -> tuple[str, str]:
     flow = _flow(config, state=state)
+    # Pre-generate a PKCE code_verifier so we can carry it across the
+    # redirect; Google requires the same verifier at code-exchange time.
+    flow.code_verifier = secrets.token_urlsafe(64)
     url, _state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
-    # The flow sometimes returns a different scope ordering; ensure the
-    # calendar scope string is present verbatim by appending it to scope
-    # query if missing (defensive — Google's own URL already includes them).
-    return url
+    return url, flow.code_verifier
 
 
-def exchange_code(config: Config, code: str) -> GoogleAuthResult:
-    flow = _flow(config)
+def exchange_code(config: Config, code: str,
+                  code_verifier: str | None = None) -> GoogleAuthResult:
+    flow = _flow(config, code_verifier=code_verifier)
     flow.fetch_token(code=code)
     creds = flow.credentials
     # id_token present on OIDC-scoped auth; parse it.

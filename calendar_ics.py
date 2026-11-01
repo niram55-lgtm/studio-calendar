@@ -46,7 +46,12 @@ def _jerusalem_vtimezone() -> Timezone:
     dst.add("TZOFFSETFROM", dt.timedelta(hours=2))
     dst.add("TZOFFSETTO", dt.timedelta(hours=3))
     dst.add("TZNAME", "IDT")
-    dst.add("RRULE", {"FREQ": "YEARLY", "BYMONTH": 3, "BYDAY": "-1FR"})
+    # Israel DST starts the Friday BEFORE the last Sunday of March.
+    # Last Sunday of March ∈ [25..31] → Friday-before ∈ [23..29].
+    # BYDAY=FR + BYMONTHDAY picks the Friday in that window.
+    dst.add("RRULE", {"FREQ": "YEARLY", "BYMONTH": 3,
+                      "BYDAY": "FR",
+                      "BYMONTHDAY": [23, 24, 25, 26, 27, 28, 29]})
 
     tz.add_component(std)
     tz.add_component(dst)

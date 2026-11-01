@@ -36,15 +36,49 @@ class SyncDiff:
 
 def compute_diff(old: list[ClassSnapshot],
                  new: list[ClassItem]) -> SyncDiff:
-    old_map = {s.loose_uid: s for s in old}
-    new_map = {loose_uid(c): c for c in new}
+    """Compute added/removed/changed between stored snapshots and new scrape.
 
-    added = [c for uid, c in new_map.items() if uid not in old_map]
-    removed = [s for uid, s in old_map.items() if uid not in new_map]
+    Primary matching is by loose_uid (date+trainer+class_type) so a time
+    shift becomes "changed" (one event moved) rather than removed+added.
+    When the same (date, trainer, class_type) appears twice in a day —
+    e.g. a double Pilates slot — the loose key collides, so for those
+    groups we fall back to matching by strict_uid (which includes time
+    and room). Each slot is tracked as its own event; a shift within a
+    collision group is reported as removed+added instead of changed.
+    """
+    new_by_loose: dict[str, list[ClassItem]] = {}
+    for c in new:
+        new_by_loose.setdefault(loose_uid(c), []).append(c)
+    old_by_loose: dict[str, list[ClassSnapshot]] = {}
+    for s in old:
+        old_by_loose.setdefault(s.loose_uid, []).append(s)
+
+    added: list[ClassItem] = []
+    removed: list[ClassSnapshot] = []
     changed: list[tuple[ClassSnapshot, ClassItem]] = []
-    for uid in old_map.keys() & new_map.keys():
-        if old_map[uid].strict_uid != strict_uid(new_map[uid]):
-            changed.append((old_map[uid], new_map[uid]))
+
+    for luid in set(new_by_loose) | set(old_by_loose):
+        news = new_by_loose.get(luid, [])
+        olds = old_by_loose.get(luid, [])
+        if len(news) <= 1 and len(olds) <= 1:
+            if news and not olds:
+                added.extend(news)
+            elif olds and not news:
+                removed.extend(olds)
+            else:
+                old_snap = olds[0]
+                new_item = news[0]
+                if old_snap.strict_uid != strict_uid(new_item):
+                    changed.append((old_snap, new_item))
+        else:
+            new_by_strict = {strict_uid(c): c for c in news}
+            old_by_strict = {s.strict_uid: s for s in olds}
+            for sid, c in new_by_strict.items():
+                if sid not in old_by_strict:
+                    added.append(c)
+            for sid, s in old_by_strict.items():
+                if sid not in new_by_strict:
+                    removed.append(s)
     return SyncDiff(added=added, removed=removed, changed=changed)
 
 
@@ -134,16 +168,41 @@ def sync_user(
            .filter_by(user_id=user_id).all())
     diff = compute_diff(old=old, new=classes)
 
+    def _status_code(exc: Exception) -> int | None:
+        resp = getattr(exc, "resp", None)
+        return getattr(resp, "status", None) if resp is not None else None
+
+    def _recreate_calendar() -> str:
+        tok_row = (session.query(GoogleToken)
+                   .filter_by(user_id=user_id).one())
+        tok_row.calendar_id = None
+        session.flush()
+        return ensure_calendar(
+            session, user_id, display_name,
+            build_service=lambda _uid: service,
+        )
+
     try:
-        # DELETE removed
+        # DELETE removed. Only drop the snapshot if the event is confirmed
+        # gone from Google; a transient API failure must leave the
+        # snapshot so the next sync retries instead of orphaning the event.
         for snap in diff.removed:
             if snap.google_event_id:
                 try:
                     _retry_execute(service.events().delete(
                         calendarId=calendar_id, eventId=snap.google_event_id))
+                    session.delete(snap)
                 except Exception as exc:  # pragma: no cover
-                    logger.warning("delete failed: %s", exc)
-            session.delete(snap)
+                    code = _status_code(exc)
+                    if code in (404, 410):
+                        # Already gone — safe to drop the snapshot.
+                        session.delete(snap)
+                    else:
+                        logger.warning(
+                            "delete failed, keeping snapshot %s for retry: %s",
+                            snap.id, exc)
+            else:
+                session.delete(snap)
 
         # UPDATE changed
         for old_snap, new_item in diff.changed:
@@ -161,12 +220,22 @@ def sync_user(
             old_snap.class_time = new_item.time.strftime("%H:%M")
             old_snap.room = new_item.room
 
-        # INSERT added
+        # INSERT added. If the calendar was deleted in Google UI, insert
+        # 404s — recreate the calendar once and retry.
         for new_item in diff.added:
             body = _event_body(new_item, duration_minutes)
-            created = _retry_execute(service.events().insert(
-                calendarId=calendar_id, body=body,
-            ))
+            try:
+                created = _retry_execute(service.events().insert(
+                    calendarId=calendar_id, body=body,
+                ))
+            except Exception as exc:
+                if _status_code(exc) == 404:
+                    calendar_id = _recreate_calendar()
+                    created = _retry_execute(service.events().insert(
+                        calendarId=calendar_id, body=body,
+                    ))
+                else:
+                    raise
             session.add(ClassSnapshot(
                 user_id=user_id,
                 loose_uid=loose_uid(new_item),

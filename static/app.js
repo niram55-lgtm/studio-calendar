@@ -65,7 +65,11 @@
 
   $("btn-sync").addEventListener("click", async () => {
     $("sync-status").textContent = "מסנכרן...";
-    const r = await fetch("/api/sync", {method: "POST"});
+    const r = await fetch("/api/sync", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: "{}",
+    });
     const d = await r.json();
     if (r.status === 401) {
       $("sync-status").innerHTML = '<a href="/auth/google">צריך להתחבר מחדש ל-Google</a>';
@@ -88,6 +92,20 @@
     navigator.clipboard.writeText(url);
     alert("הועתק!");
   });
+
+  const topicEl = $("ntfy-topic");
+  const revealBtn = $("btn-reveal-topic");
+  if (revealBtn) {
+    revealBtn.addEventListener("click", () => {
+      if (topicEl.textContent === "••••••••") {
+        topicEl.textContent = topicEl.dataset.topic;
+        revealBtn.textContent = "הסתר";
+      } else {
+        topicEl.textContent = "••••••••";
+        revealBtn.textContent = "הצג";
+      }
+    });
+  }
 
   // Settings
   async function loadSettings() {

@@ -35,6 +35,33 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
     app.config["STUDIO_CONFIG"] = config
     app.config["SESSION_FACTORY"] = session_factory or SessionLocal
 
+    # Harden session cookies. In cloud mode we trust an HTTPS proxy
+    # (Render.com) and apply ProxyFix so url_for(_external=True) and
+    # request.is_secure() work correctly.
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=(config.deployment_mode == "cloud"),
+    )
+    if config.deployment_mode == "cloud":
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+    @app.before_request
+    def _csrf_guard():
+        """Reject state-changing cross-origin requests."""
+        if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
+            return None
+        if not request.path.startswith("/api/"):
+            return None
+        ctype = (request.content_type or "").split(";", 1)[0].strip()
+        if ctype != "application/json":
+            return jsonify({"error": "content-type must be application/json"}), 415
+        origin = request.headers.get("Origin")
+        if origin and not origin.startswith(config.base_url):
+            return jsonify({"error": "cross-origin blocked"}), 403
+        return None
+
     @app.before_request
     def _attach_session():
         g.db_session = app.config["SESSION_FACTORY"]()
@@ -75,7 +102,8 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
     def auth_google():
         state = secrets.token_urlsafe(32)
         session["oauth_state"] = state
-        url = auth.build_authorize_url(config, state=state)
+        url, verifier = auth.build_authorize_url(config, state=state)
+        session["oauth_code_verifier"] = verifier
         return redirect(url)
 
     @app.route("/auth/callback")
@@ -84,7 +112,8 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
         state = request.args.get("state")
         if not code or state != session.get("oauth_state"):
             return "Invalid state", 400
-        result = auth.exchange_code(config, code)
+        verifier = session.pop("oauth_code_verifier", None)
+        result = auth.exchange_code(config, code, code_verifier=verifier)
         user = auth.upsert_user_from_auth(g.db_session, result)
         g.db_session.commit()
         session["user_id"] = user.id
@@ -124,7 +153,6 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         settings = _current_settings()
-        settings.studio_url = studio_id
 
         http = requests.Session()
         classes = fetch_schedule(
@@ -137,6 +165,9 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
             user_agent=config.boostapp.user_agent,
             request_timeout=config.boostapp.request_timeout,
         )
+        # Only persist the studio id after fetch succeeds, so a bad link
+        # doesn't overwrite a working one.
+        settings.studio_url = studio_id
         trainer_counts: dict[str, int] = {}
         for c in classes:
             trainer_counts[c.trainer] = trainer_counts.get(c.trainer, 0) + 1
@@ -271,10 +302,13 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
                    .filter_by(user_id=s.user_id, enabled=True).all()}
         if not s.studio_url:
             return build_ics([])
-        # Serve every cached week for this studio (cache lifecycle is
-        # managed by the scheduler; feed is a pure read).
+        # Only serve cached weeks whose start is on or after a week ago;
+        # otherwise ghost classes from long-expired weeks pile up in the
+        # feed. Scheduler refreshes current + weeks_ahead rows regularly.
+        cutoff = dt.date.today() - dt.timedelta(days=7)
         rows = (g.db_session.query(ScrapeCache)
-                .filter_by(studio_url=s.studio_url).all())
+                .filter(ScrapeCache.studio_url == s.studio_url,
+                        ScrapeCache.week_start >= cutoff).all())
         items: list[ClassItem] = []
         for row in rows:
             items.extend(parse_schedule_html(row.html))
@@ -312,6 +346,7 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import os as _os
     import logging as _logging
     _logging.basicConfig(level=_logging.INFO)
     cfg = load_config()
@@ -319,7 +354,15 @@ if __name__ == "__main__":  # pragma: no cover
     init_db(engine)
     SessionLocal.configure(bind=engine)
     http = requests.Session()
-    from scheduler import start as start_scheduler
-    start_scheduler(cfg, SessionLocal, http)
+    # Scheduler runs in-process. On multi-worker deployments (gunicorn
+    # with --workers N) only ONE worker may start it, else cron jobs fire
+    # N times. Default on for local; set SCHEDULER_ENABLED=0 on all but
+    # one worker in cloud.
+    if _os.environ.get("SCHEDULER_ENABLED", "1") == "1":
+        from scheduler import start as start_scheduler
+        start_scheduler(cfg, SessionLocal, http)
     app = create_app(cfg, session_factory=SessionLocal)
-    app.run(host=cfg.host, port=cfg.port, use_reloader=False)
+    # Cloud (Render) binds on 0.0.0.0:$PORT; local keeps config values.
+    host = "0.0.0.0" if cfg.deployment_mode == "cloud" else cfg.host
+    port = int(_os.environ.get("PORT", cfg.port))
+    app.run(host=host, port=port, use_reloader=False)

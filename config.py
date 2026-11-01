@@ -79,9 +79,10 @@ def load_config(path: str | None = None) -> Config:
     client_secret = _require_env("GOOGLE_CLIENT_SECRET")
 
     base_url = os.environ.get("BASE_URL", raw["base_url"])
+    deployment_mode = os.environ.get("DEPLOYMENT_MODE", raw["deployment_mode"])
 
     return Config(
-        deployment_mode=raw["deployment_mode"],
+        deployment_mode=deployment_mode,
         base_url=base_url,
         host=raw["host"],
         port=int(raw["port"]),

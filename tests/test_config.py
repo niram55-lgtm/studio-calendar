@@ -23,6 +23,8 @@ def test_load_config_overrides_base_url_from_env(monkeypatch):
 
 
 def test_load_config_rejects_missing_fernet_key(monkeypatch):
+    # Prevent load_dotenv from repopulating env from the project's .env.
+    monkeypatch.setattr("config.load_dotenv", lambda *a, **kw: None)
     monkeypatch.delenv("FERNET_KEY", raising=False)
     with pytest.raises(RuntimeError):
         load_config("config.example.yaml")
