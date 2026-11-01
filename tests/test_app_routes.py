@@ -44,6 +44,17 @@ def test_healthz(client):
     assert r.data == b"ok"
 
 
+def test_root_redirects_to_login_when_session_user_id_stale(client):
+    """Cookie points to a user_id that no longer exists in DB
+    (e.g., after a Render free-tier redeploy wiped SQLite).
+    Must redirect to /login, not crash with AttributeError."""
+    with client.session_transaction() as s:
+        s["user_id"] = 999999
+    r = client.get("/")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
 def _seed_user_with_cache(session, html: str, feed="feed-abc", enabled_trainer="שירן אמויאל"):
     u = User(google_sub="g1", email="x@y", display_name="x")
     session.add(u)

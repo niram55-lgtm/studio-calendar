@@ -87,7 +87,11 @@ def create_app(config: Config, *, session_factory=None) -> Flask:
         if (path.startswith("/static/") or path.startswith("/feed/")
                 or path in PUBLIC_PATHS):
             return None
-        if "user_id" not in session:
+        uid = session.get("user_id")
+        if uid is None:
+            return redirect(url_for("login"))
+        if g.db_session.get(User, uid) is None:
+            session.clear()
             return redirect(url_for("login"))
 
     @app.route("/healthz")
